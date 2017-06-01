@@ -75,6 +75,7 @@ module TcRnMonad(
   -- * Context management for the type checker
   getErrCtxt, setErrCtxt, addErrCtxt, addErrCtxtM, addLandmarkErrCtxt,
   addLandmarkErrCtxtM, updCtxt, popErrCtxt, getCtLocM, setCtLocM,
+  newGivenLoc,
 
   -- * Error message generation (type checker)
   addErrTc, addErrsTc,
@@ -1151,10 +1152,12 @@ popErrCtxt = updCtxt (\ msgs -> case msgs of { [] -> []; (_ : ms) -> ms })
 getCtLocM :: CtOrigin -> Maybe TypeOrKind -> TcM CtLoc
 getCtLocM origin t_or_k
   = do { env <- getLclEnv
+       ; uniq <- newUnique
        ; return (CtLoc { ctl_origin = origin
                        , ctl_env    = env
                        , ctl_t_or_k = t_or_k
-                       , ctl_depth  = initialSubGoalDepth }) }
+                       , ctl_depth  = initialSubGoalDepth
+                       , ctl_uniq   = uniq }) }
 
 setCtLocM :: CtLoc -> TcM a -> TcM a
 -- Set the SrcSpan and error context from the CtLoc
@@ -1163,6 +1166,17 @@ setCtLocM (CtLoc { ctl_env = lcl }) thing_inside
                            , tcl_bndrs = tcl_bndrs lcl
                            , tcl_ctxt  = tcl_ctxt lcl })
               thing_inside
+
+-- works in both TcM and TcS monads
+newGivenLoc :: MonadUnique m => TcLevel -> SkolemInfo -> TcLclEnv -> m CtLoc
+newGivenLoc tclvl skol_info env
+  = do { uniq <- getUniqueM
+       ; return $ CtLoc { ctl_origin = GivenOrigin skol_info
+                        , ctl_env    = env { tcl_tclvl = tclvl }
+                        , ctl_t_or_k = Nothing    -- this only matters for error msgs
+                        , ctl_depth  = initialSubGoalDepth
+                        , ctl_uniq   = uniq } }
+
 
 {-
 ************************************************************************

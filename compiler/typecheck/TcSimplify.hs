@@ -481,7 +481,7 @@ tcCheckSatisfiability :: Bag EvVar -> TcM Bool
 -- Return True if satisfiable, False if definitely contradictory
 tcCheckSatisfiability given_ids
   = do { lcl_env <- TcM.getLclEnv
-       ; let given_loc = mkGivenLoc topTcLevel UnkSkol lcl_env
+       ; given_loc <- newGivenLoc topTcLevel UnkSkol lcl_env
        ; (res, _ev_binds) <- runTcS $
              do { traceTcS "checkSatisfiability {" (ppr given_ids)
                 ; let given_cts = mkGivens given_loc (bagToList given_ids)
@@ -611,8 +611,8 @@ simplifyInfer rhs_tclvl infer_mode sigs name_taus wanteds
        ; wanted_transformed_incl_derivs
             <- setTcLevel rhs_tclvl $
                runTcSWithEvBinds ev_binds_var $
-               do { let loc = mkGivenLoc rhs_tclvl UnkSkol tc_lcl_env
-                        psig_givens = mkGivens loc psig_theta_vars
+               do { loc <- newGivenLoc rhs_tclvl UnkSkol tc_lcl_env
+                  ; let psig_givens = mkGivens loc psig_theta_vars
                   ; _ <- solveSimpleGivens psig_givens
                          -- See Note [Add signature contexts as givens]
                   ; wanteds' <- solveWanteds wanteds
@@ -1366,8 +1366,8 @@ solveImplication imp@(Implic { ic_tclvl  = tclvl
          -- Solve the nested constraints
        ; (no_given_eqs, given_insols, residual_wanted)
             <- nestImplicTcS ev_binds_var tclvl $
-               do { let loc    = mkGivenLoc tclvl info env
-                        givens = mkGivens loc given_ids
+               do { loc <- newGivenLoc tclvl info env
+                  ; let givens = mkGivens loc given_ids
                   ; solveSimpleGivens givens
 
                   ; residual_wanted <- solveWanteds wanteds
@@ -1956,7 +1956,7 @@ floatEqualities :: [TcTyVar] -> Bool
 -- Subtleties: Note [Float equalities from under a skolem binding]
 --             Note [Skolem escape]
 floatEqualities skols no_given_eqs
-                wanteds@(WC { wc_simple = simples })
+                wanteds@(WC { wc_simple = simples, wc_insol = insols })
   | not no_given_eqs  -- There are some given equalities, so don't float
   = return (emptyBag, wanteds)   -- Note [Float Equalities out of Implications]
 
@@ -1968,7 +1968,9 @@ floatEqualities skols no_given_eqs
          simples <- TcS.zonkSimples simples
 
        -- Now we can pick the ones to float
-       ; let (float_eqs, remaining_simples) = partitionBag (usefulToFloat skol_set) simples
+       ; let insoluble_uniqs = mkUniqSet $ map ctLoc $ bagToList insols
+             (float_eqs, remaining_simples)
+               = partitionBag (usefulToFloat skol_set insoluble_uniqs) simples
              skol_set = mkVarSet skols
 
        -- Promote any unification variables mentioned in the floated equalities
@@ -1983,10 +1985,14 @@ floatEqualities skols no_given_eqs
        ; return ( float_eqs
                 , wanteds { wc_simple = remaining_simples } ) }
 
-usefulToFloat :: VarSet -> Ct -> Bool
-usefulToFloat skol_set ct   -- The constraint is un-flattened and de-canonicalised
+usefulToFloat :: VarSet        -- ^ the skolems in the implication
+              -> UniqSet CtLoc -- ^ The Uniques of the insoluble constraints;
+                               -- See Note [Unique in CtLoc] in TcRnTypes
+              -> Ct -> Bool
+usefulToFloat skol_set insol_uniqs ct   -- The constraint is un-flattened and de-canonicalised
   = is_meta_var_eq pred &&
-    (tyCoVarsOfType pred `disjointVarSet` skol_set)
+    (tyCoVarsOfType pred `disjointVarSet` skol_set) &&
+    not (ctLoc ct `elementOfUniqSet` insol_uniqs) -- See Note [Unique in CtLoc] in TcRnTypes
   where
     pred = ctPred ct
 
@@ -2177,10 +2183,8 @@ disambigGroup (default_ty:default_tys) group@(the_tv, wanteds)
     try_group
       | Just subst <- mb_subst
       = do { lcl_env <- TcS.getLclEnv
-           ; let loc = CtLoc { ctl_origin = GivenOrigin UnkSkol
-                             , ctl_env    = lcl_env
-                             , ctl_t_or_k = Nothing
-                             , ctl_depth  = initialSubGoalDepth }
+           ; tc_lvl <- TcS.getTcLevel
+           ; loc <- newGivenLoc tc_lvl UnkSkol lcl_env
            ; wanted_evs <- mapM (newWantedEvVarNC loc . substTy subst . ctPred)
                                 wanteds
            ; fmap isEmptyWC $
