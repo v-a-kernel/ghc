@@ -448,3 +448,5 @@ test('T13821B', expect_broken(13821), backpack_typecheck_fail, [''])
 test('T13530', normal, compile_fail, [''])
 test('T12373', normal, compile_fail, [''])
 test('T13610', normal, compile_fail, [''])
+test('T11672', normal, compile_fail, [''])
+
